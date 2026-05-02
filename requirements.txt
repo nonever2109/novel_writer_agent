@@ -1,0 +1,6 @@
+openai
+langgraph
+python-dotenv
+streamlit
+fastapi
+uvicorn

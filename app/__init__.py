@@ -1,0 +1,1 @@
+"""Novel writer agent package."""
