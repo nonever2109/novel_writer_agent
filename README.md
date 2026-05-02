@@ -159,9 +159,9 @@ LLM_TIMEOUT_SECONDS=600
 
 如果对写作速度不要求的，可以申请openrouter的免费api-key
 官网
-[openrouter官方https://openrouter.ai/](https://openrouter.ai/)
+[openrouter官方 https://openrouter.ai/](https://openrouter.ai/)
 查看免费的模型
-[openrouter官方免费模型列，后面有Free都是免费https://openrouter.ai/models(https://openrouter.ai/models)
+[openrouter官方免费模型列，后面有Free都是免费 https://openrouter.ai/models](https://openrouter.ai/models)
 
 
 
@@ -183,3 +183,16 @@ scripts/init_env.py   初始化配置脚本
 - 章节生成可能需要 5 到 10 分钟，具体取决于模型速度和章节长度。
 - 如果模型返回质量不稳定，可以更换模型或提高超时时间。
 - 真实模型调用失败、超时、返回空文本或返回不可解析 JSON 时，程序会直接报错；只有显式选择 Mock 测试模式时才会使用本地测试数据。
+
+
+## 截图
+![旧版Streamlit 界面](./assets/01.png)
+![新版界面](./assets/02.png)
+![使用选题助手](./assets/03.png)
+![选择助手生成的推荐素材](./assets/04.png)
+![使用素材生成写作大纲](./assets/05.png)
+![生成的大纲列表](./assets/06.png)
+![开始章节写作](./assets/07.png)
+![章节写作完成](./assets/08.png)
+![版本对比](./assets/09.png)
+![故事大纲中查看记忆信息](./assets/091.png)
