@@ -4,7 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from threading import Lock
 from time import perf_counter
-from traceback import format_exception_only
+from traceback import format_exc, format_exception_only
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -63,6 +63,7 @@ def _run_task(task_id: str, runner: TaskRunner) -> None:
     try:
         result = runner(lambda event: _add_event(task_id, event))
     except Exception as exc:  # noqa: BLE001 - task boundary must capture user-visible failure
+        print(format_exc(), flush=True)
         with _lock:
             task = _tasks[task_id]
             task["status"] = "failed"

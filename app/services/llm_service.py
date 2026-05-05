@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any
 
 from app import config
@@ -53,7 +54,11 @@ def generate_json(
     try:
         return _extract_json_object(text)
     except ValueError as exc:
-        raise ValueError("模型没有返回可解析 JSON。") from exc
+        fallback = dict(fallback)
+        fallback["llm_parse_error"] = "模型没有返回可解析 JSON，已使用本地结构化 fallback 继续流程。"
+        fallback["raw_model_output"] = text[: config.LLM_TRACE_MAX_CHARS]
+        _progress("模型返回 JSON 解析失败，已使用本地结构化 fallback 继续流程")
+        return fallback
 
 
 def generate_text(
@@ -78,9 +83,42 @@ def generate_text(
 
 
 def _extract_json_object(text: str) -> dict[str, Any]:
-    start = text.find("{")
-    if start == -1:
+    text = _strip_json_fence(text.strip())
+    starts = [index for index, char in enumerate(text) if char == "{"]
+    if not starts:
         raise ValueError("No JSON object found.")
+
+    last_error: Exception | None = None
+    for start in starts:
+        try:
+            return _parse_json_object_at(text, start)
+        except (json.JSONDecodeError, ValueError) as exc:
+            last_error = exc
+            continue
+    if last_error:
+        raise ValueError(f"No valid JSON object found: {last_error}") from last_error
+    raise ValueError("No complete JSON object found.")
+
+
+def _strip_json_fence(text: str) -> str:
+    match = re.fullmatch(r"```(?:json|JSON)?\s*(.*?)\s*```", text, flags=re.DOTALL)
+    return match.group(1).strip() if match else text
+
+
+def _parse_json_object_at(text: str, start: int) -> dict[str, Any]:
+    candidate = _slice_json_object(text, start)
+    try:
+        value = json.loads(candidate)
+    except json.JSONDecodeError:
+        value = json.loads(_remove_trailing_commas(candidate))
+    if not isinstance(value, dict):
+        raise ValueError("Parsed JSON value is not an object.")
+    return value
+
+
+def _slice_json_object(text: str, start: int) -> str:
+    if text[start] != "{":
+        raise ValueError("JSON object must start with '{'.")
 
     depth = 0
     in_string = False
@@ -103,8 +141,12 @@ def _extract_json_object(text: str) -> dict[str, Any]:
         elif char == "}":
             depth -= 1
             if depth == 0:
-                return json.loads(text[start : index + 1])
+                return text[start : index + 1]
     raise ValueError("No complete JSON object found.")
+
+
+def _remove_trailing_commas(text: str) -> str:
+    return re.sub(r",\s*([}\]])", r"\1", text)
 
 
 def _trace(system_prompt: str, user_prompt: str, response: str) -> None:

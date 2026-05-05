@@ -97,7 +97,7 @@ def create_project(name: str, index_path: str | Path | None = None) -> dict[str,
         if project.get("name") == clean_name:
             raise ValueError(f"Project name already exists: {clean_name}")
 
-    project_id = _unique_project_id(clean_name, index)
+    project_id = _unique_project_id(clean_name, index, index_path)
     now = _utc_now()
     project_root = Path("projects") / project_id
     project = {
@@ -120,7 +120,7 @@ def create_numbered_project(name: str, index_path: str | Path | None = None) -> 
         raise ValueError("Project name is required.")
 
     index = load_project_index(index_path)
-    project_id = _next_numbered_project_id(index)
+    project_id = _next_numbered_project_id(index, index_path)
     now = _utc_now()
     project_root = Path("projects") / project_id
     project = {
@@ -236,23 +236,36 @@ def _find_project(index: dict[str, Any], project_id: str | None) -> dict[str, An
     return None
 
 
-def _unique_project_id(name: str, index: dict[str, Any]) -> str:
+def _unique_project_id(name: str, index: dict[str, Any], index_path: str | Path | None = None) -> str:
     base = _slugify(name) or "novel"
     existing = {project.get("id") for project in index.get("projects", []) if isinstance(project, dict)}
-    if base not in existing:
+    if base not in existing and not _managed_project_root_exists(base, index_path):
         return base
     counter = 2
-    while f"{base}-{counter}" in existing:
+    while f"{base}-{counter}" in existing or _managed_project_root_exists(f"{base}-{counter}", index_path):
         counter += 1
     return f"{base}-{counter}"
 
 
-def _next_numbered_project_id(index: dict[str, Any]) -> str:
+def _next_numbered_project_id(index: dict[str, Any], index_path: str | Path | None = None) -> str:
     existing = {str(project.get("id")) for project in index.get("projects", []) if isinstance(project, dict)}
     counter = 1
-    while f"novel-{counter}" in existing:
+    while f"novel-{counter}" in existing or _managed_project_root_exists(f"novel-{counter}", index_path):
         counter += 1
     return f"novel-{counter}"
+
+
+def _managed_project_root_exists(project_id: str, index_path: str | Path | None = None) -> bool:
+    return (_project_index_base_dir(index_path) / "projects" / project_id).exists()
+
+
+def _project_index_base_dir(index_path: str | Path | None = None) -> Path:
+    if index_path is not None:
+        path = Path(index_path)
+        if not path.is_absolute():
+            path = config.project_root() / path
+        return path.parent
+    return project_index_path().parent
 
 
 def _slugify(value: str) -> str:

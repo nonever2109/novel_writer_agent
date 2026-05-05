@@ -73,7 +73,10 @@ def _build_outline_request(
         else "逐章计划中可按章节任务自然安排正文篇幅。"
     )
     system_prompt = (
-        "你是专业长篇小说策划编辑。请只输出 JSON，不要输出 Markdown。"
+        "你是专业长篇小说策划编辑。请只输出一个合法 JSON 对象，不要输出 Markdown。"
+        "回复的第一个字符必须是 {，最后一个字符必须是 }。"
+        "不要使用注释、尾逗号、中文引号或省略号占位。"
+        "JSON 字段名保持英文，所有字段值、章节标题、角色说明、故事设定、风格指南和备注必须使用简体中文。"
         "目标是建立可连载的故事底座，而不是写正文。"
     )
     user_prompt = (
@@ -83,6 +86,8 @@ def _build_outline_request(
         '{"planned_chapters":[{"chapter_number":1,"title":"...","goal":"...","expected_hook":"..."}]}。'
         f"必须精确生成 {target_chapter_count} 个章节计划，从 1 到 {target_chapter_count} 连续编号。"
         "不要只输出第1-5章、第1-30章这样的范围；如果需要分卷，可额外输出 volume_plan。"
+        "所有字符串必须用英文双引号包裹，数组和对象的最后一项后面不要加逗号。"
+        "除 JSON 字段名外，所有自然语言内容必须是简体中文，不要输出英文大纲。"
         f"{word_requirement}\n\n"
         f"创作需求：\n{user_input}"
     )

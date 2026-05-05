@@ -14,7 +14,7 @@ from app.services.safety_service import safety_check, transform_request
 
 def load_memory(state: NovelState) -> NovelState:
     memory_dir = state.get("memory_dir", config.NOVEL_MEMORY_DIR)
-    memory = load_story_memory(memory_dir)
+    memory = _as_dict(load_story_memory(memory_dir))
     return {
         "story_memory": memory,
         "genre_profile": memory.get("genre_profile", {}),
@@ -40,7 +40,7 @@ def input_safety_check(state: NovelState) -> NovelState:
 
 
 def transform_input_if_needed(state: NovelState) -> NovelState:
-    report = state.get("input_safety_report", {})
+    report = _as_dict(state.get("input_safety_report", {}))
     if report.get("status") == "blocked":
         raise ValueError(report.get("notes", "Input is blocked by safety policy."))
     transformed = transform_request(state.get("story_request", {}), report)
@@ -48,7 +48,7 @@ def transform_input_if_needed(state: NovelState) -> NovelState:
 
 
 def build_story_context(state: NovelState) -> NovelState:
-    memory = state.get("story_memory", {})
+    memory = _as_dict(state.get("story_memory", {}))
     context = {
         "bible": memory.get("bible", ""),
         "style_guide": memory.get("style_guide", ""),
@@ -63,8 +63,8 @@ def build_story_context(state: NovelState) -> NovelState:
 
 
 def plan_chapter(state: NovelState) -> NovelState:
-    request = state.get("transformed_request") or state.get("story_request", {})
-    genre = state.get("genre_profile", {})
+    request = _as_dict(state.get("transformed_request") or state.get("story_request", {}))
+    genre = _as_dict(state.get("genre_profile", {}))
     planned_chapter = _find_planned_chapter(state, request.get("chapter_number"))
     fallback = {
         "chapter_number": request.get("chapter_number"),
@@ -95,7 +95,7 @@ def plan_chapter(state: NovelState) -> NovelState:
 
 
 def plan_scenes(state: NovelState) -> NovelState:
-    plan = state.get("chapter_plan", {})
+    plan = _as_dict(state.get("chapter_plan", {}))
     fallback = {
         "chapter_goal": plan.get("chapter_goal"),
         "scenes": [
@@ -142,8 +142,8 @@ def plan_scenes(state: NovelState) -> NovelState:
 
 
 def write_scenes(state: NovelState) -> NovelState:
-    request = state.get("transformed_request") or state.get("story_request", {})
-    scene_plan = state.get("scene_plan", {}).get("scenes", [])
+    request = _as_dict(state.get("transformed_request") or state.get("story_request", {}))
+    scene_plan = _normalize_scenes(_as_dict(state.get("scene_plan", {})).get("scenes", []))
     drafts = []
     for index, scene in enumerate(scene_plan, start=1):
         fallback = _draft_scene(index, scene, request)
@@ -175,8 +175,9 @@ def write_scenes(state: NovelState) -> NovelState:
 
 
 def merge_chapter(state: NovelState) -> NovelState:
-    chapter_number = state.get("chapter_plan", {}).get("chapter_number")
-    chapter_title = state.get("chapter_plan", {}).get("chapter_title")
+    chapter_plan = _as_dict(state.get("chapter_plan", {}))
+    chapter_number = chapter_plan.get("chapter_number")
+    chapter_title = chapter_plan.get("chapter_title")
     if chapter_number and chapter_title:
         title = f"第{chapter_number}章 {chapter_title}"
     elif chapter_number:
@@ -215,7 +216,7 @@ def continuity_check(state: NovelState) -> NovelState:
 
 def fix_continuity_issues(state: NovelState) -> NovelState:
     chapter = state.get("merged_chapter", "")
-    report = state.get("continuity_report", {})
+    report = _as_dict(state.get("continuity_report", {}))
     if report.get("status") == "needs_fix":
         chapter += "\n\n> 连续性修复备注：补充场景进入/退出状态后再进入下一轮写作。\n"
     return {"continuity_fixed_chapter": chapter}
@@ -228,7 +229,7 @@ def chapter_safety_check(state: NovelState) -> NovelState:
 
 def fix_safety_issues(state: NovelState) -> NovelState:
     chapter = state.get("continuity_fixed_chapter") or state.get("merged_chapter", "")
-    report = state.get("chapter_safety_report", {})
+    report = _as_dict(state.get("chapter_safety_report", {}))
     if report.get("status") == "needs_transform":
         chapter += "\n\n> 安全修复备注：已要求后续版本保持原创角色、原创世界观和不同剧情结构。\n"
     if report.get("status") == "blocked":
@@ -238,7 +239,7 @@ def fix_safety_issues(state: NovelState) -> NovelState:
 
 def polish_chapter(state: NovelState) -> NovelState:
     chapter = state.get("safety_fixed_chapter") or state.get("continuity_fixed_chapter") or state.get("merged_chapter", "")
-    style = state.get("story_context", {}).get("style_guide", "")
+    style = _as_dict(state.get("story_context", {})).get("style_guide", "")
     polished = chapter.rstrip()
     if style:
         polished += "\n\n<!-- style_guide_applied: true -->\n"
@@ -282,6 +283,7 @@ def optimize_chapter_hook(state: NovelState) -> NovelState:
         fallback=fallback,
         temperature=0.5,
     )
+    report = _as_dict(report)
     hook = report.get("hook") or fallback["hook"]
     final = chapter.rstrip() + f"\n\n---\n\n{hook}\n"
     return {"chapter_hook_report": report, "final_chapter": final}
@@ -323,7 +325,7 @@ def evaluate_chapter_experience(state: NovelState) -> NovelState:
 
 
 def archive_chapter(state: NovelState) -> NovelState:
-    request = state.get("story_request", {})
+    request = _as_dict(state.get("story_request", {}))
     chapter_number = request.get("chapter_number") or _next_chapter_number(state)
     fallback = {
         "chapter_number": chapter_number,
@@ -335,8 +337,8 @@ def archive_chapter(state: NovelState) -> NovelState:
         "involved_characters": [],
         "locations": [],
         "plot_threads": ["主线推进"],
-        "foreshadowing": [state.get("chapter_hook_report", {}).get("hook", "")],
-        "tags": ["mvp", state.get("genre_profile", {}).get("primary_genre", "general")],
+        "foreshadowing": [_as_dict(state.get("chapter_hook_report", {})).get("hook", "")],
+        "tags": ["mvp", _as_dict(state.get("genre_profile", {})).get("primary_genre", "general")],
     }
     archive = generate_json(
         system_prompt="你是小说档案管理员。请只输出 JSON，不要输出 Markdown。",
@@ -355,7 +357,7 @@ def archive_chapter(state: NovelState) -> NovelState:
 
 
 def update_story_memory(state: NovelState) -> NovelState:
-    archive = state.get("chapter_archive", {})
+    archive = _as_dict(state.get("chapter_archive", {}))
     fallback = {
         "chapter_number": archive.get("chapter_number"),
         "chapter_summary": archive.get("summary"),
@@ -378,13 +380,13 @@ def update_story_memory(state: NovelState) -> NovelState:
             {
                 "name": "下一章期待",
                 "status": "seeded",
-                "detail": state.get("chapter_hook_report", {}).get("hook", ""),
+                "detail": _as_dict(state.get("chapter_hook_report", {})).get("hook", ""),
                 "chapter_number": archive.get("chapter_number"),
             }
         ],
         "world_state_updates": [],
-        "open_questions": [state.get("chapter_hook_report", {}).get("next_chapter_promise", "")],
-        "next_chapter_hooks": [state.get("chapter_hook_report", {}).get("hook", "")],
+        "open_questions": [_as_dict(state.get("chapter_hook_report", {})).get("next_chapter_promise", "")],
+        "next_chapter_hooks": [_as_dict(state.get("chapter_hook_report", {})).get("hook", "")],
     }
     update = generate_json(
         system_prompt="你是小说故事账本管理员。请只输出 JSON，不要输出 Markdown。",
@@ -404,7 +406,7 @@ def update_story_memory(state: NovelState) -> NovelState:
 
 
 def validate_memory_update(state: NovelState) -> NovelState:
-    update = state.get("memory_update", {})
+    update = _as_dict(state.get("memory_update", {}))
     final_chapter = state.get("final_chapter", "")
     report = {
         "status": "pass",
@@ -448,14 +450,18 @@ def _draft_scene(index: int, scene: dict[str, Any], request: dict[str, Any]) -> 
 
 
 def _summarize_for_archive(state: NovelState) -> str:
-    goal = state.get("chapter_plan", {}).get("chapter_goal", "")
-    hook = state.get("chapter_hook_report", {}).get("hook", "")
+    goal = _as_dict(state.get("chapter_plan", {})).get("chapter_goal", "")
+    hook = _as_dict(state.get("chapter_hook_report", {})).get("hook", "")
     return f"本章围绕“{goal}”推进，完成阶段性状态变化，并留下钩子：{hook}"
 
 
 def _next_chapter_number(state: NovelState) -> int:
-    summaries = state.get("story_memory", {}).get("chapter_summaries", [])
-    numbers = [item.get("chapter_number") for item in summaries if isinstance(item.get("chapter_number"), int)]
+    summaries = _as_dict(state.get("story_memory", {})).get("chapter_summaries", [])
+    numbers = [
+        item.get("chapter_number")
+        for item in summaries
+        if isinstance(item, dict) and isinstance(item.get("chapter_number"), int)
+    ]
     return max(numbers, default=0) + 1
 
 
@@ -463,10 +469,10 @@ def _find_planned_chapter(state: NovelState, chapter_number: int | None) -> dict
     if chapter_number is None:
         return {}
     planned = (
-        state.get("story_memory", {})
+        _as_dict(state.get("story_memory", {}))
         .get("chapter_plan", {})
-        .get("planned_chapters", [])
     )
+    planned = _as_dict(planned).get("planned_chapters", []) if isinstance(planned, dict) else planned
     for item in planned:
         if isinstance(item, dict) and item.get("chapter_number") == chapter_number:
             return item
@@ -500,3 +506,37 @@ def _as_list(value: Any) -> list[Any]:
     if isinstance(value, list):
         return value
     return [value]
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _normalize_scenes(value: Any) -> list[dict[str, Any]]:
+    scenes = value if isinstance(value, list) else [value]
+    normalized = []
+    for index, scene in enumerate(scenes, start=1):
+        if isinstance(scene, dict):
+            item = dict(scene)
+        elif scene:
+            text = str(scene)
+            item = {
+                "scene_id": f"scene_{index}",
+                "purpose": text,
+                "entry_state": "角色带着未解决问题进入场景。",
+                "conflict": text,
+                "exit_state": "场景结束时，信息、关系或处境发生变化。",
+                "key_reveal": text,
+                "emotional_turn": "角色因新信息产生明确态度变化。",
+            }
+        else:
+            continue
+        item.setdefault("scene_id", f"scene_{index}")
+        item.setdefault("purpose", "推进本章目标。")
+        item.setdefault("entry_state", "角色带着未解决问题进入场景。")
+        item.setdefault("conflict", "目标与限制发生碰撞。")
+        item.setdefault("exit_state", "场景结束时，信息、关系或处境发生变化。")
+        item.setdefault("key_reveal", "揭示一个影响行动判断的信息。")
+        item.setdefault("emotional_turn", "角色因新信息产生明确态度变化。")
+        normalized.append(item)
+    return normalized
