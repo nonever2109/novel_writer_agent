@@ -69,8 +69,8 @@ class TopicSuggestionRequest(BaseModel):
 
 class TopicUseRequest(BaseModel):
     title: str = Field(..., min_length=1, max_length=80)
-    outline_prompt: str = Field(..., min_length=1, max_length=4000)
-    chapters: int = Field(default=30, ge=1, le=500)
+    outline_prompt: str = Field(..., min_length=1, max_length=20000)
+    chapters: int = Field(default=30, ge=1, le=2000)
     target_words_per_chapter: int | None = Field(default=3000, ge=100, le=50000)
 
 
@@ -79,7 +79,7 @@ class OutlineRequest(BaseModel):
     project_id: str | None = None
     memory_dir: str | None = None
     output_dir: str | None = None
-    chapters: int = Field(default=30, ge=1, le=500)
+    chapters: int = Field(default=30, ge=1, le=2000)
     target_words_per_chapter: int | None = Field(default=None, ge=100, le=50000)
     reset_writing_records: bool = False
 

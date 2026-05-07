@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 import shutil
 import re
@@ -13,6 +14,7 @@ from app.services.memory_service import ensure_default_memory
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 T = TypeVar("T")
+OUTLINE_BATCH_SIZE = 50
 
 
 def generate_story_outline(
@@ -22,6 +24,15 @@ def generate_story_outline(
     target_words_per_chapter: int | None = None,
     progress_callback: ProgressCallback | None = None,
 ) -> dict[str, Any]:
+    if target_chapter_count > OUTLINE_BATCH_SIZE:
+        return _generate_segmented_story_outline(
+            user_input,
+            memory_dir,
+            target_chapter_count,
+            target_words_per_chapter,
+            progress_callback,
+        )
+
     total_steps = 5
     _run_outline_step(progress_callback, "初始化故事记忆", 1, total_steps, lambda: ensure_default_memory(memory_dir))
 
@@ -61,6 +72,91 @@ def generate_story_outline(
     return outline
 
 
+def _generate_segmented_story_outline(
+    user_input: str,
+    memory_dir: str,
+    target_chapter_count: int,
+    target_words_per_chapter: int | None,
+    progress_callback: ProgressCallback | None,
+) -> dict[str, Any]:
+    batches = _chapter_batches(target_chapter_count, OUTLINE_BATCH_SIZE)
+    total_steps = len(batches) + 4
+    _run_outline_step(progress_callback, "初始化故事记忆", 1, total_steps, lambda: ensure_default_memory(memory_dir))
+
+    overview_fallback, overview_system_prompt, overview_user_prompt = _build_outline_overview_request(
+        user_input,
+        target_chapter_count,
+        target_words_per_chapter,
+    )
+    overview = _run_outline_step(
+        progress_callback,
+        "请求模型生成总纲",
+        2,
+        total_steps,
+        lambda: generate_json(
+            system_prompt=overview_system_prompt,
+            user_prompt=overview_user_prompt,
+            fallback=overview_fallback,
+            temperature=0.5,
+        ),
+    )
+
+    planned_chapters: list[dict[str, Any]] = []
+    previous_batch_tail: list[dict[str, Any]] = []
+    for offset, (start, end) in enumerate(batches, start=3):
+        batch_fallback, batch_system_prompt, batch_user_prompt = _build_chapter_batch_request(
+            user_input=user_input,
+            overview=overview,
+            start_chapter=start,
+            end_chapter=end,
+            target_words_per_chapter=target_words_per_chapter,
+            previous_batch_tail=previous_batch_tail,
+        )
+        batch_outline = _run_outline_step(
+            progress_callback,
+            f"请求模型生成第{start}-{end}章",
+            offset,
+            total_steps,
+            lambda fallback=batch_fallback, system_prompt=batch_system_prompt, user_prompt=batch_user_prompt: generate_json(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                fallback=fallback,
+                temperature=0.5,
+            ),
+        )
+        batch_plan = normalize_chapter_plan(
+            batch_outline.get("chapter_plan", batch_outline),
+            target_chapter_count=end,
+        )
+        batch_chapters = [
+            chapter
+            for chapter in batch_plan.get("planned_chapters", [])
+            if isinstance(chapter, dict) and start <= chapter.get("chapter_number", 0) <= end
+        ]
+        planned_chapters.extend(batch_chapters)
+        previous_batch_tail = batch_chapters[-5:]
+
+    outline = _run_outline_step(
+        progress_callback,
+        "整理章节计划",
+        len(batches) + 3,
+        total_steps,
+        lambda: _normalize_outline(
+            _merge_segmented_outline(overview, planned_chapters, target_words_per_chapter),
+            target_chapter_count,
+            target_words_per_chapter,
+        ),
+    )
+    _run_outline_step(
+        progress_callback,
+        "写入故事记忆",
+        len(batches) + 4,
+        total_steps,
+        lambda: _write_outline(memory_dir, outline, user_input, target_chapter_count, target_words_per_chapter),
+    )
+    return outline
+
+
 def _build_outline_request(
     user_input: str,
     target_chapter_count: int,
@@ -92,6 +188,98 @@ def _build_outline_request(
         f"创作需求：\n{user_input}"
     )
     return fallback, system_prompt, user_prompt
+
+
+def _build_outline_overview_request(
+    user_input: str,
+    target_chapter_count: int,
+    target_words_per_chapter: int | None,
+) -> tuple[dict[str, Any], str, str]:
+    fallback = _fallback_outline(user_input, target_chapter_count, target_words_per_chapter)
+    fallback["chapter_plan"] = {
+        "target_words_per_chapter": target_words_per_chapter,
+        "volume_plan": _fallback_volume_plan(target_chapter_count),
+        "planned_chapters": [],
+    }
+    word_requirement = (
+        f"每章正文目标字数约 {target_words_per_chapter} 字。"
+        if target_words_per_chapter
+        else "逐章正文篇幅后续按章节任务自然安排。"
+    )
+    system_prompt = (
+        "你是专业长篇小说策划编辑。请只输出一个合法 JSON 对象，不要输出 Markdown。"
+        "回复的第一个字符必须是 {，最后一个字符必须是 }。"
+        "不要使用注释、尾逗号、中文引号或省略号占位。"
+        "JSON 字段名保持英文，所有字段值必须使用简体中文。"
+        "本轮只建立长篇项目总纲，不生成逐章章节表。"
+    )
+    user_prompt = (
+        "根据以下创作需求生成小说项目总纲。必须包含字段："
+        "genre_profile, bible, style_guide, chapter_plan, plot_threads, foreshadowing, characters。\n"
+        "chapter_plan 本轮只输出 volume_plan，不要输出 planned_chapters。"
+        "volume_plan 用数组表示，每卷必须包含 volume_number, name, range, focus, milestones。"
+        f"总章数为 {target_chapter_count} 章，后续会按每 {OUTLINE_BATCH_SIZE} 章分批生成逐章计划。"
+        "volume_plan 的 range 必须覆盖第1章到最后一章。"
+        "除 JSON 字段名外，所有自然语言内容必须是简体中文。"
+        f"{word_requirement}\n\n"
+        f"创作需求：\n{user_input}"
+    )
+    return fallback, system_prompt, user_prompt
+
+
+def _build_chapter_batch_request(
+    user_input: str,
+    overview: dict[str, Any],
+    start_chapter: int,
+    end_chapter: int,
+    target_words_per_chapter: int | None,
+    previous_batch_tail: list[dict[str, Any]],
+) -> tuple[dict[str, Any], str, str]:
+    fallback = {
+        "chapter_plan": {
+            "planned_chapters": _fallback_chapters_for_range(start_chapter, end_chapter, target_words_per_chapter)
+        }
+    }
+    word_requirement = (
+        f"每章增加 target_words 字段，值必须为 {target_words_per_chapter}。"
+        if target_words_per_chapter
+        else "每章不需要输出正文字数，只写章节任务。"
+    )
+    overview_context = _compact_outline_context(overview)
+    previous_context = json.dumps(previous_batch_tail, ensure_ascii=False)
+    system_prompt = (
+        "你是专业长篇小说策划编辑。请只输出一个合法 JSON 对象，不要输出 Markdown。"
+        "回复的第一个字符必须是 {，最后一个字符必须是 }。"
+        "不要使用注释、尾逗号、中文引号或省略号占位。"
+        "本轮只生成指定范围内的逐章计划。"
+    )
+    user_prompt = (
+        f"请只生成第 {start_chapter} 章到第 {end_chapter} 章的逐章计划。"
+        "输出格式必须为："
+        '{"chapter_plan":{"planned_chapters":[{"chapter_number":1,"title":"...","goal":"...","expected_hook":"..."}]}}。'
+        f"chapter_number 必须从 {start_chapter} 到 {end_chapter} 连续编号，不能输出范围外章节。"
+        "每章 goal 要写清本章的剧情推进和状态变化，expected_hook 要写清章末期待。"
+        f"{word_requirement}"
+        "所有自然语言内容必须是简体中文。\n\n"
+        f"创作需求：\n{user_input}\n\n"
+        f"项目总纲：\n{overview_context}\n\n"
+        f"上一批最后几章，用于保持承接：\n{previous_context}"
+    )
+    return fallback, system_prompt, user_prompt
+
+
+def _merge_segmented_outline(
+    overview: dict[str, Any],
+    planned_chapters: list[dict[str, Any]],
+    target_words_per_chapter: int | None,
+) -> dict[str, Any]:
+    outline = dict(overview)
+    chapter_plan = dict(outline.get("chapter_plan", {}))
+    chapter_plan["planned_chapters"] = planned_chapters
+    if target_words_per_chapter:
+        chapter_plan["target_words_per_chapter"] = target_words_per_chapter
+    outline["chapter_plan"] = chapter_plan
+    return outline
 
 
 def _normalize_outline(
@@ -159,9 +347,14 @@ def normalize_chapter_plan(
 ) -> dict[str, Any]:
     planned = chapter_plan.get("planned_chapters")
     if isinstance(planned, list) and _has_integer_chapters(planned):
-        return _normalize_planned_chapter_count(chapter_plan, target_chapter_count)
+        normalized = _normalize_planned_chapter_count(chapter_plan, target_chapter_count)
+        normalized["volume_plan"] = _normalize_volume_plan(
+            normalized.get("volume_plan"),
+            target_chapter_count or len(normalized.get("planned_chapters", [])),
+        )
+        return _attach_volume_info(normalized)
 
-    volumes = _extract_volume_plan(chapter_plan)
+    volumes = _normalize_volume_plan(_extract_volume_plan(chapter_plan), target_chapter_count)
     if not volumes:
         return {"planned_chapters": []}
 
@@ -179,6 +372,8 @@ def normalize_chapter_plan(
                     "title": f"第{chapter_number}章",
                     "goal": volume.get("focus", ""),
                     "expected_hook": milestone or "延续本卷核心悬念，并推进下一章期待。",
+                    "volume_number": volume.get("volume_number"),
+                    "volume_name": volume.get("name", ""),
                     "volume": volume.get("name", ""),
                 }
             )
@@ -187,7 +382,7 @@ def normalize_chapter_plan(
         "planned_chapters": planned_chapters,
         "volume_plan": volumes,
     }
-    return _normalize_planned_chapter_count(normalized, target_chapter_count)
+    return _attach_volume_info(_normalize_planned_chapter_count(normalized, target_chapter_count))
 
 
 def _write_outline(
@@ -286,6 +481,26 @@ def _normalize_list_container(value: Any, key: str) -> dict[str, list[Any]]:
     return {key: []}
 
 
+def _chapter_batches(target_chapter_count: int, batch_size: int) -> list[tuple[int, int]]:
+    return [
+        (start, min(start + batch_size - 1, target_chapter_count))
+        for start in range(1, target_chapter_count + 1, batch_size)
+    ]
+
+
+def _compact_outline_context(overview: dict[str, Any]) -> str:
+    context = {
+        "genre_profile": overview.get("genre_profile", {}),
+        "bible": overview.get("bible", ""),
+        "style_guide": overview.get("style_guide", ""),
+        "volume_plan": overview.get("chapter_plan", {}).get("volume_plan", []),
+        "plot_threads": overview.get("plot_threads", {}),
+        "foreshadowing": overview.get("foreshadowing", {}),
+        "characters": overview.get("characters", {}),
+    }
+    return json.dumps(context, ensure_ascii=False)
+
+
 def _fallback_outline(
     user_input: str,
     target_chapter_count: int = 30,
@@ -325,6 +540,24 @@ def _fallback_outline(
     }
 
 
+def _fallback_volume_plan(target_chapter_count: int) -> list[dict[str, Any]]:
+    volumes = []
+    for index, (start, end) in enumerate(_chapter_batches(target_chapter_count, OUTLINE_BATCH_SIZE), start=1):
+        volumes.append(
+            {
+                "volume_number": index,
+                "name": f"第{index}卷",
+                "range": f"{start}-{end}",
+                "focus": "推进主线阶段目标，制造关键转折，并维持连载期待。",
+                "milestones": [
+                    f"第{start}章：开启本阶段任务。",
+                    f"第{end}章：完成阶段转折，并抛出下一阶段悬念。",
+                ],
+            }
+        )
+    return volumes
+
+
 def _dict_to_md(title: str, data: dict[str, Any]) -> str:
     lines = [f"# {title}", ""]
     for key, value in data.items():
@@ -359,8 +592,67 @@ def _extract_volume_plan(chapter_plan: dict[str, Any]) -> list[dict[str, Any]]:
     return extracted
 
 
+def _normalize_volume_plan(value: Any, target_chapter_count: int | None = None) -> list[dict[str, Any]]:
+    volumes = value if isinstance(value, list) else []
+    normalized = []
+    for index, item in enumerate(volumes, start=1):
+        if not isinstance(item, dict):
+            continue
+        volume = dict(item)
+        volume_number = volume.get("volume_number")
+        if not isinstance(volume_number, int):
+            volume_number = index
+        volume["volume_number"] = volume_number
+        volume.setdefault("name", f"第{volume_number}卷")
+        if "range" not in volume and target_chapter_count:
+            start = (index - 1) * OUTLINE_BATCH_SIZE + 1
+            end = min(index * OUTLINE_BATCH_SIZE, target_chapter_count)
+            volume["range"] = f"{start}-{end}"
+        volume.setdefault("focus", "")
+        volume.setdefault("milestones", [])
+        normalized.append(volume)
+
+    if not normalized and target_chapter_count and target_chapter_count > OUTLINE_BATCH_SIZE:
+        return _fallback_volume_plan(target_chapter_count)
+    return normalized
+
+
+def _attach_volume_info(chapter_plan: dict[str, Any]) -> dict[str, Any]:
+    volumes = _normalize_volume_plan(chapter_plan.get("volume_plan"))
+    if not volumes:
+        return chapter_plan
+
+    planned = []
+    for chapter in chapter_plan.get("planned_chapters", []):
+        if not isinstance(chapter, dict):
+            continue
+        item = dict(chapter)
+        number = item.get("chapter_number")
+        volume = _volume_for_chapter(volumes, number if isinstance(number, int) else None)
+        if volume:
+            item["volume_number"] = volume.get("volume_number")
+            item["volume_name"] = volume.get("name", "")
+            item["volume"] = volume.get("name", "")
+        planned.append(item)
+
+    result = dict(chapter_plan)
+    result["volume_plan"] = volumes
+    result["planned_chapters"] = planned
+    return result
+
+
+def _volume_for_chapter(volumes: list[dict[str, Any]], chapter_number: int | None) -> dict[str, Any] | None:
+    if chapter_number is None:
+        return None
+    for volume in volumes:
+        start, end = _parse_chapter_range(str(volume.get("range", "")))
+        if start is not None and end is not None and start <= chapter_number <= end:
+            return volume
+    return None
+
+
 def _parse_chapter_range(text: str) -> tuple[int | None, int | None]:
-    match = re.search(r"(\d+)\s*[-到至]\s*(\d+)", text)
+    match = re.search(r"第?\s*(\d+)\s*章?\s*[-到至~—－]\s*第?\s*(\d+)\s*章?", text)
     if match:
         return int(match.group(1)), int(match.group(2))
     match = re.search(r"第\s*(\d+)\s*章", text)
@@ -433,8 +725,25 @@ def _nearest_existing_goal(chapter_number: int, planned: list[Any]) -> str:
 
 
 def _fallback_chapters(target_chapter_count: int, target_words_per_chapter: int | None = None) -> list[dict[str, Any]]:
+    chapters = _fallback_chapters_for_range(1, target_chapter_count, target_words_per_chapter)
+    if chapters:
+        chapters[0]["title"] = "开端"
+        chapters[0]["goal"] = "建立主角处境，投放主线线索。"
+        chapters[0]["expected_hook"] = "出现更大的未解问题。"
+    if len(chapters) > 1:
+        chapters[1]["title"] = "追索"
+        chapters[1]["goal"] = "让主角主动追查，并遭遇第一次阻碍。"
+        chapters[1]["expected_hook"] = "线索指向更危险的人或地点。"
+    return chapters
+
+
+def _fallback_chapters_for_range(
+    start_chapter: int,
+    end_chapter: int,
+    target_words_per_chapter: int | None = None,
+) -> list[dict[str, Any]]:
     chapters = []
-    for chapter_number in range(1, target_chapter_count + 1):
+    for chapter_number in range(start_chapter, end_chapter + 1):
         chapter = {
             "chapter_number": chapter_number,
             "title": f"第{chapter_number}章",
@@ -444,12 +753,4 @@ def _fallback_chapters(target_chapter_count: int, target_words_per_chapter: int 
         if target_words_per_chapter:
             chapter["target_words"] = target_words_per_chapter
         chapters.append(chapter)
-    if chapters:
-        chapters[0]["title"] = "开端"
-        chapters[0]["goal"] = "建立主角处境，投放主线线索。"
-        chapters[0]["expected_hook"] = "出现更大的未解问题。"
-    if len(chapters) > 1:
-        chapters[1]["title"] = "追索"
-        chapters[1]["goal"] = "让主角主动追查，并遭遇第一次阻碍。"
-        chapters[1]["expected_hook"] = "线索指向更危险的人或地点。"
     return chapters

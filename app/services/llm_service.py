@@ -16,6 +16,7 @@ def get_provider() -> BaseLLMProvider:
             api_key=config.OPENAI_API_KEY,
             model=config.OPENAI_MODEL,
             timeout=config.LLM_TIMEOUT_SECONDS,
+            retry_attempts=config.LLM_RETRY_ATTEMPTS,
         )
     if config.PROVIDER in {"compatible", "openai_compatible"}:
         if not config.COMPAT_API_KEY:
@@ -27,6 +28,7 @@ def get_provider() -> BaseLLMProvider:
             model=config.COMPAT_MODEL,
             base_url=config.COMPAT_BASE_URL,
             timeout=config.LLM_TIMEOUT_SECONDS,
+            retry_attempts=config.LLM_RETRY_ATTEMPTS,
         )
     return MockLLMProvider()
 
@@ -163,4 +165,8 @@ def _trace(system_prompt: str, user_prompt: str, response: str) -> None:
 
 def _progress(message: str) -> None:
     if config.LLM_PROGRESS:
-        print(f"[LLM] {message} (provider={config.PROVIDER}, timeout={config.LLM_TIMEOUT_SECONDS}s)", flush=True)
+        print(
+            f"[LLM] {message} "
+            f"(provider={config.PROVIDER}, timeout={config.LLM_TIMEOUT_SECONDS}s, retries={config.LLM_RETRY_ATTEMPTS})",
+            flush=True,
+        )
