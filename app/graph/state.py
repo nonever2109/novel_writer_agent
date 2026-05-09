@@ -18,10 +18,8 @@ class NovelState(TypedDict, total=False):
     input_safety_report: dict[str, Any]
     transformed_request: dict[str, Any]
     chapter_plan: dict[str, Any]
-    scene_plan: dict[str, Any]
 
     # Drafting
-    scene_drafts: list[dict[str, Any]]
     merged_chapter: str
     continuity_report: dict[str, Any]
     continuity_fixed_chapter: str

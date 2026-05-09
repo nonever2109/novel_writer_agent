@@ -15,16 +15,14 @@ from app.nodes.chapter_pipeline import fix_continuity_issues
 from app.nodes.chapter_pipeline import fix_safety_issues
 from app.nodes.chapter_pipeline import input_safety_check
 from app.nodes.chapter_pipeline import load_memory
-from app.nodes.chapter_pipeline import merge_chapter
 from app.nodes.chapter_pipeline import normalize_story_request
 from app.nodes.chapter_pipeline import optimize_chapter_hook
 from app.nodes.chapter_pipeline import plan_chapter
-from app.nodes.chapter_pipeline import plan_scenes
 from app.nodes.chapter_pipeline import polish_chapter
 from app.nodes.chapter_pipeline import transform_input_if_needed
 from app.nodes.chapter_pipeline import update_story_memory
 from app.nodes.chapter_pipeline import validate_memory_update
-from app.nodes.chapter_pipeline import write_scenes
+from app.nodes.chapter_pipeline import write_chapter_draft
 
 
 Node = Callable[[NovelState], NovelState]
@@ -38,9 +36,7 @@ WORKFLOW_LABELS = {
     "transform_input_if_needed": "调整写作请求",
     "build_story_context": "整理故事上下文",
     "plan_chapter": "规划章节结构",
-    "plan_scenes": "拆分场景",
-    "write_scenes": "生成场景正文",
-    "merge_chapter": "合并章节草稿",
+    "write_chapter_draft": "生成章节正文",
     "continuity_check": "检查故事连续性",
     "fix_continuity_issues": "修正连续性问题",
     "chapter_safety_check": "检查章节安全",
@@ -62,9 +58,7 @@ WORKFLOW: list[tuple[str, Node]] = [
     ("transform_input_if_needed", transform_input_if_needed),
     ("build_story_context", build_story_context),
     ("plan_chapter", plan_chapter),
-    ("plan_scenes", plan_scenes),
-    ("write_scenes", write_scenes),
-    ("merge_chapter", merge_chapter),
+    ("write_chapter_draft", write_chapter_draft),
     ("continuity_check", continuity_check),
     ("fix_continuity_issues", fix_continuity_issues),
     ("chapter_safety_check", chapter_safety_check),

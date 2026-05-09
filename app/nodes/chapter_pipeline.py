@@ -94,97 +94,41 @@ def plan_chapter(state: NovelState) -> NovelState:
     return {"chapter_plan": plan}
 
 
-def plan_scenes(state: NovelState) -> NovelState:
-    plan = _as_dict(state.get("chapter_plan", {}))
-    fallback = {
-        "chapter_goal": plan.get("chapter_goal"),
-        "scenes": [
-        {
-            "scene_id": "scene_1",
-            "purpose": "承接上一章状态，明确本章目标和阻碍。",
-            "entry_state": "角色带着未解决问题进入场景。",
-            "conflict": "目标与限制发生碰撞。",
-            "exit_state": "角色得到新线索，但代价或风险上升。",
-            "key_reveal": "揭示一个会影响本章行动的新信息。",
-            "emotional_turn": "角色从观望或迟疑转向主动应对。",
-        },
-        {
-            "scene_id": "scene_2",
-            "purpose": "升级冲突，并让角色做出选择。",
-            "entry_state": "新线索迫使角色采取行动。",
-            "conflict": "外部压力与角色内心顾虑同时加重。",
-            "exit_state": "选择造成关系、信息或处境变化。",
-            "key_reveal": "补充一个改变局势判断的细节。",
-            "emotional_turn": "角色在压力下暴露真实立场或情绪。",
-        },
-        {
-            "scene_id": "scene_3",
-            "purpose": "兑现本章戏剧任务，并留下下一章钩子。",
-            "entry_state": "角色接近阶段性答案。",
-            "conflict": "答案带来更大的问题。",
-            "exit_state": "本章问题部分解决，新的期待被打开。",
-            "key_reveal": "给出阶段性答案，同时引出更大的疑问。",
-            "emotional_turn": "角色从短暂确定转向新的不安或决心。",
-        },
-        ],
-    }
-    scene_plan = generate_json(
-        system_prompt="你是专业小说场景编排编辑。请只输出 JSON，不要输出 Markdown。",
-        user_prompt=(
-            "请把章节计划拆成 3 到 6 个场景。必须输出字段：chapter_goal, scenes。"
-            "每个 scene 必须包含 scene_id, purpose, entry_state, conflict, exit_state, key_reveal, emotional_turn。\n\n"
-            f"章节计划：{plan}\n\n故事上下文：{state.get('story_context', {})}"
-        ),
-        fallback=fallback,
-        temperature=0.5,
-    )
-    return {"scene_plan": scene_plan}
-
-
-def write_scenes(state: NovelState) -> NovelState:
+def write_chapter_draft(state: NovelState) -> NovelState:
     request = _as_dict(state.get("transformed_request") or state.get("story_request", {}))
-    scene_plan = _normalize_scenes(_as_dict(state.get("scene_plan", {})).get("scenes", []))
-    drafts = []
-    for index, scene in enumerate(scene_plan, start=1):
-        fallback = _draft_scene(index, scene, request)
-        body = generate_text(
-            system_prompt=(
-                "你是专业连载小说作者。请根据题材、人物、章节目标和故事上下文写作。"
-                "文风要求：自然、清晰、有现场感，符合当前小说类型和读者期待。"
-                "多写人物怎么说、怎么做、怎么停顿，用具体动作和细节推进剧情。"
-                "少用抽象抒情、宏大总结和咬文嚼字的句子，避免把设定写成说明书。"
-                "不要复刻受版权保护作品或在世作者具体文风。"
-            ),
-            user_prompt=(
-                "请写一个完整场景正文。不要输出 JSON。不要解释你的写法。\n"
-                "硬性风格要求：\n"
-                "- 对白要像真人说话，可以有停顿、反问、没说完的话。\n"
-                "- 句子尽量适中，少用长串修饰。\n"
-                "- 少用“仿佛、像是、某种、命运、灵魂、深处、无声地、微微、骤然、复杂情绪”等 AI 腔词。\n"
-                "- 不要每段都总结人物心理。用动作、眼神、物件和环境细节带出情绪。\n"
-                "- 不要把背景设定一次性讲完，只让角色在行动里碰到信息。\n"
-                "- 悬疑感来自具体异常和信息差，不要靠空泛的阴冷、压迫、宿命感。\n\n"
-                f"本章需求：{request}\n\n章节计划：{state.get('chapter_plan', {})}\n\n"
-                f"场景规划：{scene}\n\n故事上下文：{state.get('story_context', {})}"
-            ),
-            fallback=fallback,
-            temperature=0.8,
-        )
-        drafts.append({"scene_id": scene.get("scene_id"), "body": body, "purpose": scene.get("purpose")})
-    return {"scene_drafts": drafts}
-
-
-def merge_chapter(state: NovelState) -> NovelState:
     chapter_plan = _as_dict(state.get("chapter_plan", {}))
     chapter_number = chapter_plan.get("chapter_number")
     chapter_title = chapter_plan.get("chapter_title")
+    fallback = _draft_chapter(request, chapter_plan)
+    body = generate_text(
+        system_prompt=(
+            "你是专业连载小说作者。请根据题材、人物、章节目标和故事上下文一次性写完整章节。"
+            "文风要求：自然、清晰、有现场感，符合当前小说类型和读者期待。"
+            "多写人物怎么说、怎么做、怎么停顿，用具体动作和细节推进剧情。"
+            "少用抽象抒情、宏大总结和咬文嚼字的句子，避免把设定写成说明书。"
+            "不要复刻受版权保护作品或在世作者具体文风。"
+        ),
+        user_prompt=(
+            "请一次性写出本章完整正文。不要拆成场景请求，不要输出 JSON，不要解释你的写法。\n"
+            "硬性风格要求：\n"
+            "- 对白要像真人说话，可以有停顿、反问、没说完的话。\n"
+            "- 句子尽量适中，少用长串修饰。\n"
+            "- 少用“仿佛、像是、某种、命运、灵魂、深处、无声地、微微、骤然、复杂情绪”等 AI 腔词。\n"
+            "- 不要每段都总结人物心理。用动作、眼神、物件和环境细节带出情绪。\n"
+            "- 不要把背景设定一次性讲完，只让角色在行动里碰到信息。\n"
+            "- 悬疑感来自具体异常和信息差，不要靠空泛的阴冷、压迫、宿命感。\n"
+            "- 本章内部要有清晰的起承转合，但不要输出场景规划或分段说明。\n\n"
+            f"本章需求：{request}\n\n章节计划：{chapter_plan}\n\n故事上下文：{state.get('story_context', {})}"
+        ),
+        fallback=fallback,
+        temperature=0.8,
+    )
     if chapter_number and chapter_title:
         title = f"第{chapter_number}章 {chapter_title}"
     elif chapter_number:
         title = f"第{chapter_number}章"
     else:
         title = chapter_title or "未命名章节"
-    body = "\n\n".join(item.get("body", "") for item in state.get("scene_drafts", []))
     return {"merged_chapter": f"# {title}\n\n{body}\n"}
 
 
@@ -193,14 +137,14 @@ def continuity_check(state: NovelState) -> NovelState:
         "status": "pass",
         "issues": [],
         "checks": [
-            "本章具有进入状态和退出状态。",
+            "本章具有完整章节正文。",
             "章节计划包含戏剧任务。",
             "已为角色、伏笔和时间线更新预留记录。",
         ],
     }
-    if not state.get("scene_drafts"):
+    if not state.get("merged_chapter"):
         fallback["status"] = "needs_fix"
-        fallback["issues"].append("缺少场景草稿。")
+        fallback["issues"].append("缺少章节草稿。")
     report = generate_json(
         system_prompt="你是小说连续性审稿人。请只输出 JSON，不要输出 Markdown。",
         user_prompt=(
@@ -218,7 +162,7 @@ def fix_continuity_issues(state: NovelState) -> NovelState:
     chapter = state.get("merged_chapter", "")
     report = _as_dict(state.get("continuity_report", {}))
     if report.get("status") == "needs_fix":
-        chapter += "\n\n> 连续性修复备注：补充场景进入/退出状态后再进入下一轮写作。\n"
+        chapter += "\n\n> 连续性修复备注：补充章节进入/退出状态后再进入下一轮写作。\n"
     return {"continuity_fixed_chapter": chapter}
 
 
@@ -439,13 +383,13 @@ def _extract_target_length(text: str) -> int | None:
     return None
 
 
-def _draft_scene(index: int, scene: dict[str, Any], request: dict[str, Any]) -> str:
-    goal = request.get("chapter_goal", "继续推进故事")
+def _draft_chapter(request: dict[str, Any], chapter_plan: dict[str, Any]) -> str:
+    goal = chapter_plan.get("chapter_goal") or request.get("chapter_goal", "继续推进故事")
     return (
-        f"## 场景 {index}\n\n"
-        f"{scene.get('entry_state')} 本章目标是：{goal}\n\n"
-        f"{scene.get('conflict')} 角色必须在压力下做出选择，而这个选择会改变后续局势。\n\n"
-        f"{scene.get('exit_state')}"
+        f"本章目标是：{goal}\n\n"
+        "角色带着未解决问题进入新的行动现场。目标与限制发生碰撞，角色必须在压力下做出选择，"
+        "这个选择会改变后续局势。\n\n"
+        "本章结束时，信息、关系或处境发生明确变化，并留下下一章期待。"
     )
 
 
@@ -511,32 +455,3 @@ def _as_list(value: Any) -> list[Any]:
 def _as_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
-
-def _normalize_scenes(value: Any) -> list[dict[str, Any]]:
-    scenes = value if isinstance(value, list) else [value]
-    normalized = []
-    for index, scene in enumerate(scenes, start=1):
-        if isinstance(scene, dict):
-            item = dict(scene)
-        elif scene:
-            text = str(scene)
-            item = {
-                "scene_id": f"scene_{index}",
-                "purpose": text,
-                "entry_state": "角色带着未解决问题进入场景。",
-                "conflict": text,
-                "exit_state": "场景结束时，信息、关系或处境发生变化。",
-                "key_reveal": text,
-                "emotional_turn": "角色因新信息产生明确态度变化。",
-            }
-        else:
-            continue
-        item.setdefault("scene_id", f"scene_{index}")
-        item.setdefault("purpose", "推进本章目标。")
-        item.setdefault("entry_state", "角色带着未解决问题进入场景。")
-        item.setdefault("conflict", "目标与限制发生碰撞。")
-        item.setdefault("exit_state", "场景结束时，信息、关系或处境发生变化。")
-        item.setdefault("key_reveal", "揭示一个影响行动判断的信息。")
-        item.setdefault("emotional_turn", "角色因新信息产生明确态度变化。")
-        normalized.append(item)
-    return normalized
